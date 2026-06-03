@@ -1,0 +1,183 @@
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
+
+from .indexer import KnowledgeIndex
+from .settings import Settings
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int | None = None
+
+
+class ReadRequest(BaseModel):
+    path: str
+
+
+class WriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+def create_app():
+    settings = Settings.load()
+    index = KnowledgeIndex(settings)
+    watcher_task = None
+    startup_task = None
+    readiness: dict[str, str] = {"state": "starting", "last_error": ""}
+
+    mcp = FastMCP("repo-knowledge")
+    mcp.settings.streamable_http_path = "/"
+    mcp_app = mcp.streamable_http_app()
+
+    async def watcher_loop():
+        while True:
+            try:
+                index.reindex()
+            except Exception:
+                pass
+            await asyncio.sleep(settings.watch_interval_seconds)
+
+    async def startup_reindex_loop():
+        try:
+            await asyncio.to_thread(index.reindex)
+            readiness["state"] = "ready"
+            readiness["last_error"] = ""
+        except Exception as ex:
+            readiness["state"] = "error"
+            readiness["last_error"] = str(ex)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        nonlocal watcher_task, startup_task
+        async with mcp.session_manager.run():
+            startup_task = asyncio.create_task(startup_reindex_loop())
+            try:
+                await asyncio.wait_for(asyncio.shield(startup_task), timeout=settings.startup_reindex_timeout_seconds)
+            except asyncio.TimeoutError:
+                readiness["state"] = "warming"
+            if settings.watch_interval_seconds > 0:
+                watcher_task = asyncio.create_task(watcher_loop())
+            try:
+                yield
+            finally:
+                if startup_task:
+                    startup_task.cancel()
+                if watcher_task:
+                    watcher_task.cancel()
+
+    app = FastAPI(title="Repository Knowledge Service", lifespan=lifespan, redirect_slashes=False)
+
+    @app.get(settings.health_path)
+    async def health():
+        return {
+            "status": "ok",
+            "readiness": readiness["state"],
+            "wiki_root": str(settings.wiki_root),
+            "kb_root": str(settings.kb_root),
+            "embedding_model": settings.embedding_model,
+            "watch_interval_seconds": str(settings.watch_interval_seconds),
+        }
+
+    @app.get("/ready")
+    async def ready():
+        if readiness["state"] == "ready":
+            return {"status": "ready"}
+        return JSONResponse(
+            status_code=503,
+            content={"status": readiness["state"], "last_error": readiness["last_error"]},
+        )
+
+    @mcp.tool()
+    def wiki_search(query: str, top_k: int | None = None):
+        """Search the repository wiki for relevant chunks matching a query."""
+        return [
+            {
+                "source_file": r.source_file,
+                "chunk_id": r.chunk_id,
+                "relevance_score": r.score,
+                "context": r.context,
+            }
+            for r in index.search(query, top_k)
+        ]
+
+    @mcp.tool()
+    def wiki_read(path: str):
+        """Read a wiki document by path and return its full content."""
+        return index.read_doc(path)
+
+    @mcp.tool()
+    def wiki_list():
+        """List all wiki documents currently available in the knowledge base."""
+        return index.list_docs()
+
+    @mcp.tool()
+    def wiki_write(path: str, content: str):
+        """Create or replace a wiki document, then refresh the search index."""
+        index.write_doc(path, content)
+        index.reindex()
+        return {"status": "ok", "path": path}
+
+    @mcp.tool()
+    def wiki_append(path: str, content: str):
+        """Append content to a wiki document, then refresh the search index."""
+        index.append_doc(path, content)
+        index.reindex()
+        return {"status": "ok", "path": path}
+
+    @mcp.tool()
+    def wiki_reindex():
+        """Rebuild the knowledge index from the current wiki contents."""
+        return index.reindex()
+
+    @mcp.tool()
+    def wiki_health():
+        """Return the wiki and knowledge-base roots exposed by the service."""
+        return {
+            "status": "ok",
+            "wiki_root": str(settings.wiki_root),
+            "kb_root": str(settings.kb_root),
+        }
+
+    canonical_mcp_path = settings.mcp_path
+    legacy_mcp_path = canonical_mcp_path[:-1] if canonical_mcp_path.endswith("/") else canonical_mcp_path
+    app.mount(canonical_mcp_path, mcp_app)
+    if legacy_mcp_path and legacy_mcp_path != canonical_mcp_path:
+        app.mount(legacy_mcp_path, mcp_app)
+
+    @app.post("/reindex")
+    async def force_reindex():
+        return JSONResponse(index.reindex())
+
+    @app.post("/search")
+    async def search(req: SearchRequest):
+        return [asdict(r) for r in index.search(req.query, req.top_k)]
+
+    @app.get("/list")
+    async def list_docs():
+        return index.list_docs()
+
+    @app.post("/read")
+    async def read_doc(req: ReadRequest):
+        return {"path": req.path, "content": index.read_doc(req.path)}
+
+    @app.post("/write")
+    async def write_doc(req: WriteRequest):
+        index.write_doc(req.path, req.content)
+        reindex_result: dict[str, Any] = index.reindex()
+        return {"status": "ok", "path": req.path, "reindex": reindex_result}
+
+    @app.post("/append")
+    async def append_doc(req: WriteRequest):
+        index.append_doc(req.path, req.content)
+        reindex_result: dict[str, Any] = index.reindex()
+        return {"status": "ok", "path": req.path, "reindex": reindex_result}
+
+    return app
