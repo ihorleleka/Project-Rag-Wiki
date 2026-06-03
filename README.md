@@ -40,6 +40,20 @@ docker run --rm \
   ihorleleka/project-rag-wiki:latest
 ```
 
+## Release Automation
+
+Image versioning is driven from the Git tag.
+
+- Tag releases as `vX.Y.Z`.
+- The GitHub Actions workflow at [`.github/workflows/docker-release.yml`] builds and pushes the Docker image on tag pushes.
+- The workflow strips the leading `v` and passes the remainder into the Docker build as `VERSION`.
+- That same `VERSION` value is used for the OCI image label and the installed Python package version inside the image.
+
+Set these repository settings before using the workflow:
+
+- Secret `DOCKERHUB_USERNAME`
+- Secret `DOCKERHUB_TOKEN`
+
 ## Endpoints
 
 - Health: `GET /health`

@@ -18,7 +18,7 @@ WORKDIR /app
 ENV PATH="/opt/venv/bin:$PATH"
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
-ARG VERSION=0.0.3
+ARG VERSION=0.0.0
 LABEL org.opencontainers.image.title="kb-service" \
       org.opencontainers.image.description="Repository-scoped MCP knowledge service for Markdown wiki content." \
       org.opencontainers.image.version="${VERSION}" \
@@ -30,7 +30,7 @@ COPY --from=deps /opt/venv /opt/venv
 COPY . /app/.knowledge-service
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-deps /app/.knowledge-service
+    SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION} pip install --no-deps /app/.knowledge-service
 
 ENV KB_WIKI_ROOT=/workspace/wiki
 ENV KB_ROOT=/workspace/.kb

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=69", "setuptools-scm[toml]>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kb-service"
-version = "0.0.3"
+dynamic = ["version"]
 description = "Repository-scoped MCP knowledge service"
 requires-python = ">=3.11"
 dependencies = [
@@ -24,3 +24,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
+local_scheme = "no-local-version"
