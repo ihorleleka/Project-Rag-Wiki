@@ -1,4 +1,4 @@
-# kb-service
+# Project RAG wiki
 
 [![Docker Hub](https://img.shields.io/docker/v/ihorleleka/project-rag-wiki?sort=semver&label=docker%20hub)](https://hub.docker.com/repository/docker/ihorleleka/project-rag-wiki)
 
