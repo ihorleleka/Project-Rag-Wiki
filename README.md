@@ -6,8 +6,10 @@ Repository-scoped MCP knowledge service for Markdown wiki content.
 
 It indexes Markdown files from a mounted wiki folder, stores vectors in ChromaDB, and serves:
 - MCP endpoint (streamable HTTP)
-- REST endpoints for search/read/write/reindex
-- health/readiness endpoints
+- health endpoint
+
+The MCP surface is intentionally small at the moment:
+- Active tools: `wiki_search`, `wiki_read`, `wiki_list`, `wiki_write`, `wiki_append`
 
 ## What This Image Expects
 
@@ -59,14 +61,9 @@ Set these repository settings before using the workflow:
 ## Endpoints
 
 - Health: `GET /health`
-- Ready: `GET /ready`
 - MCP: `POST /mcp/` (also mounted at `/mcp`)
-- Reindex: `POST /reindex`
-- Search: `POST /search`
-- List docs: `GET /list`
-- Read doc: `POST /read`
-- Write doc: `POST /write`
-- Append doc: `POST /append`
+
+The health response is `200` only when the service startup reindex has completed successfully and the MCP session manager is running.
 
 ## License
 
