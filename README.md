@@ -44,9 +44,9 @@ docker run --rm \
 
 Image versioning is driven from the Git tag.
 
-- Tag releases as `vX.Y.Z`.
+- Tag releases as `X.Y.Z`.
 - The GitHub Actions workflow at [`.github/workflows/docker-release.yml`] builds and pushes the Docker image on tag pushes.
-- The workflow strips the leading `v` and passes the remainder into the Docker build as `VERSION`.
+- The workflow passes the tag name directly into the Docker build as `VERSION`.
 - That same `VERSION` value is used for the OCI image label and the installed Python package version inside the image.
 
 Set these repository settings before using the workflow:

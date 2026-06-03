@@ -3,7 +3,7 @@ name: Docker Release
 on:
   push:
     tags:
-      - "v*"
+      - "*"
 
 env:
   IMAGE_NAME: ihorleleka/project-rag-wiki
@@ -23,7 +23,7 @@ jobs:
       - name: Derive version from tag
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${GITHUB_REF_NAME}"
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Capture build timestamp
