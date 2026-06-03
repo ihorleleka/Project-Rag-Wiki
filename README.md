@@ -1,5 +1,7 @@
 # kb-service
 
+[![Docker Hub](https://img.shields.io/docker/v/ihorleleka/project-rag-wiki?sort=semver&label=docker%20hub)](https://hub.docker.com/repository/docker/ihorleleka/project-rag-wiki)
+
 Repository-scoped MCP knowledge service for Markdown wiki content.
 
 It indexes Markdown files from a mounted wiki folder, stores vectors in ChromaDB, and serves:
