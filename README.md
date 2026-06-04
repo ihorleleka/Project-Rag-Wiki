@@ -71,4 +71,4 @@ The health response is `200` only when the service startup reindex has completed
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
