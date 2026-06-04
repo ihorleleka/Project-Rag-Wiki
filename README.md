@@ -11,6 +11,10 @@ It indexes Markdown files from a mounted wiki folder, stores vectors in ChromaDB
 The MCP surface is intentionally small at the moment:
 - Active tools: `wiki_search`, `wiki_read`, `wiki_list`, `wiki_write`, `wiki_append`
 
+## Agent Harness
+
+For an agent consumer of this service, see [@ihorleleka/harness](https://github.com/ihorleleka/harness).
+
 ## What This Image Expects
 
 - A wiki folder mounted at `/workspace/wiki`
