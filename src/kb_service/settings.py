@@ -16,6 +16,7 @@ class Settings:
     chunk_overlap: int
     top_k: int
     merge_adjacent_window: int
+    staleness_days: int
     watch_interval_seconds: int
     startup_reindex_timeout_seconds: int
 
@@ -41,6 +42,7 @@ class Settings:
             chunk_overlap=int(os.getenv("KB_CHUNK_OVERLAP", "150")),
             top_k=int(os.getenv("KB_TOP_K", "8")),
             merge_adjacent_window=max(0, int(os.getenv("KB_MERGE_ADJACENT_WINDOW", "1"))),
+            staleness_days=max(1, int(os.getenv("KB_STALENESS_DAYS", "90"))),
             watch_interval_seconds=int(os.getenv("KB_WATCH_INTERVAL_SECONDS", "15")),
             startup_reindex_timeout_seconds=max(1, int(os.getenv("KB_STARTUP_REINDEX_TIMEOUT_SECONDS", "3"))),
         )

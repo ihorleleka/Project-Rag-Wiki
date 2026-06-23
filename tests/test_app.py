@@ -30,7 +30,6 @@ class DummyKnowledgeIndex:
         self.search_calls: list[tuple[str, int | None]] = []
         self.read_calls: list[str] = []
         self.write_calls: list[tuple[str, str]] = []
-        self.append_calls: list[tuple[str, str]] = []
 
     def reindex(self):
         self.reindex_calls += 1
@@ -49,9 +48,6 @@ class DummyKnowledgeIndex:
 
     def write_doc(self, path, content):
         self.write_calls.append((path, content))
-
-    def append_doc(self, path, content):
-        self.append_calls.append((path, content))
 
 
 class DummyJSONResponse:
@@ -157,7 +153,7 @@ class AppBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             tool_names,
-            ["wiki_search", "wiki_read", "wiki_list", "wiki_write", "wiki_append"],
+            ["wiki_search", "wiki_read", "wiki_list", "wiki_write"],
         )
         self.assertEqual(app.mounts, [("/mcp/", "dummy-mcp-app"), ("/mcp", "dummy-mcp-app")])
 
@@ -174,6 +170,7 @@ class AppBehaviorTests(unittest.TestCase):
             chunk_overlap=150,
             top_k=8,
             merge_adjacent_window=1,
+            staleness_days=90,
             watch_interval_seconds=15,
             startup_reindex_timeout_seconds=3,
         )
@@ -203,6 +200,7 @@ class AppBehaviorTests(unittest.TestCase):
                     "chunk_id": "0",
                     "relevance_score": 0.91,
                     "context": "result context",
+                    "record_type": "chunk",
                 }
             ],
         )

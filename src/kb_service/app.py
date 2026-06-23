@@ -85,16 +85,42 @@ def create_app():
 
     @mcp.tool()
     def wiki_search(query: str, top_k: int | None = None):
-        """Search the repository wiki for relevant chunks matching a query."""
-        return [
-            {
+        """Search the repository wiki for decision packets and relevant chunks matching a query."""
+        results = []
+        for r in index.search(query, top_k):
+            item = {
                 "source_file": r.source_file,
                 "chunk_id": r.chunk_id,
                 "relevance_score": r.score,
                 "context": r.context,
             }
-            for r in index.search(query, top_k)
-            ]
+            record_type = getattr(r, "record_type", "chunk")
+            item["record_type"] = record_type
+            packet = getattr(r, "context_packet", None)
+            if packet:
+                item["context_packet"] = packet
+                item.update(packet)
+            metadata = getattr(r, "metadata", None)
+            if metadata:
+                item["semantic_metadata"] = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key
+                    in {
+                        "note_id",
+                        "scope",
+                        "status",
+                        "decision",
+                        "constraints",
+                        "anti_patterns",
+                        "evidence",
+                        "examples",
+                        "retrieval_hints",
+                        "raw_prose",
+                    }
+                }
+            results.append(item)
+        return results
 
     @mcp.tool()
     def wiki_read(path: str):
@@ -110,13 +136,6 @@ def create_app():
     def wiki_write(path: str, content: str):
         """Create or replace a wiki document, then refresh the search index."""
         index.write_doc(path, content)
-        index.reindex()
-        return {"status": "ok", "path": path}
-
-    @mcp.tool()
-    def wiki_append(path: str, content: str):
-        """Append content to a wiki document, then refresh the search index."""
-        index.append_doc(path, content)
         index.reindex()
         return {"status": "ok", "path": path}
 
