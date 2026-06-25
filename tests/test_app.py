@@ -46,6 +46,9 @@ class DummyKnowledgeIndex:
     def list_docs(self):
         return ["wiki/page.md"]
 
+    def schema_report(self):
+        return {"schema_version": 4, "total_files": 1, "summary": {"files_with_issues": 0}, "files": []}
+
     def write_doc(self, path, content):
         self.write_calls.append((path, content))
 
@@ -153,7 +156,7 @@ class AppBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             tool_names,
-            ["wiki_search", "wiki_read", "wiki_list", "wiki_write"],
+            ["wiki_search", "wiki_read", "wiki_list", "wiki_schema_report", "wiki_write"],
         )
         self.assertEqual(app.mounts, [("/mcp/", "dummy-mcp-app"), ("/mcp", "dummy-mcp-app")])
 
@@ -203,6 +206,16 @@ class AppBehaviorTests(unittest.TestCase):
                     "record_type": "chunk",
                 }
             ],
+        )
+
+    def test_schema_report_tool_returns_serializable_report(self) -> None:
+        app = self.app_module.create_app()
+        schema_report = DummyMCP.last_instance.tools[3][1]
+        result = schema_report()
+
+        self.assertEqual(
+            result,
+            {"schema_version": 4, "total_files": 1, "summary": {"files_with_issues": 0}, "files": []},
         )
 
 

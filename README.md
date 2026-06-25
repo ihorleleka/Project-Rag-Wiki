@@ -9,7 +9,7 @@ It indexes Markdown files from a mounted wiki folder, stores vectors in ChromaDB
 - health endpoint
 
 The MCP surface is intentionally small:
-- Active tools: `wiki_search`, `wiki_read`, `wiki_list`, `wiki_write`
+- Active tools: `wiki_search`, `wiki_read`, `wiki_list`, `wiki_schema_report`, `wiki_write`
 
 ## Retrieval Model
 
@@ -22,6 +22,7 @@ A note can compile into a decision-ready packet when it uses frontmatter such as
 ```yaml
 ---
 id: stable-note-id
+kind: rule
 scope: project-specific
 last_verified: YYYY-MM-DD
 status: active
@@ -30,25 +31,54 @@ applies_to:
 ---
 ```
 
-and semantic sections:
+Supported `kind` values are:
 
-```markdown
-## Use this when
-## Decision
-## Do
-## Do not
-## Evidence
-## Retrieval hints
-```
+- `rule` - mandatory behavior agents should follow.
+- `decision` - architecture or product choices with rationale and consequences.
+- `reference` - durable facts, concepts, API shapes, or domain context that are not rules.
+- `runbook` - repeatable operational or maintenance procedures.
+- `glossary` - names, terms, aliases, and vocabulary.
+
+Each kind has a compact section shape:
+
+| kind | required sections |
+|---|---|
+| `rule` | `Use this when`, `Rule`, `Do`, `Do not`, `Evidence`, `Retrieval hints` |
+| `decision` | `Use this when`, `Decision`, `Rationale`, `Consequences`, `Evidence`, `Retrieval hints` |
+| `reference` | `Use this when`, `Summary`, `Key facts`, `Evidence`, `Retrieval hints` |
+| `runbook` | `Use this when`, `Steps`, `Do not`, `Evidence`, `Retrieval hints` |
+| `glossary` | `Terms`, `Aliases`, `Retrieval hints` |
+
+The indexer is backward compatible with older notes that omit `kind` or use the
+old `Decision` / `Do` / `Do not` shape. Those notes still produce packets, but
+their `gaps` field reports missing typed-note structure so agents can modernize
+them during wiki maintenance.
 
 `wiki_search` prefers matching packet records before raw chunks. Packet results
 include normalized fields such as `rule`, `confidence`, `source`,
 `last_verified`, `needs_verification`, `applies_to`, `do`, `do_not`, `evidence`,
-and `gaps`.
+`kind`, `decision`, `rationale`, `consequences`, `summary`, `key_facts`,
+`steps`, `terms`, `aliases`, and `gaps`.
 
 Packet embeddings are built from the decision-ready sections and `applies_to`.
 The full source prose is kept as metadata/fallback, not as the primary packet
 embedding text.
+
+## Schema Report
+
+`wiki_schema_report` audits Markdown notes without writing or reindexing. It
+returns aggregate counts and per-note entries for:
+
+- inferred and explicit `kind`
+- packet compile status and packet `gaps`
+- missing required sections by kind
+- missing, invalid, or stale `last_verified`
+- missing or duplicate `id`
+- missing or invalid `status`
+- broken wiki links detected from `[[wikilinks]]`
+
+Use it before broad wiki migrations or after schema changes to decide which
+notes need typed-note cleanup.
 
 ## Write Model
 

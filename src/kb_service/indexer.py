@@ -16,9 +16,17 @@ from .text_utils import chunks, extract_links, relative_md_paths, sha256_text
 
 SEMANTIC_SECTIONS = {
     "use this when": "use_this_when",
+    "rule": "rule",
     "decision": "decision",
+    "rationale": "rationale",
+    "consequences": "consequences",
     "do": "do",
     "do not": "do_not",
+    "summary": "summary",
+    "key facts": "key_facts",
+    "steps": "steps",
+    "terms": "terms",
+    "aliases": "aliases",
     "evidence": "evidence",
     "retrieval hints": "retrieval_hints",
 }
@@ -32,7 +40,48 @@ SECTION_PRIORITY = {
     "raw": 4,
 }
 
-INDEX_SCHEMA_VERSION = 3
+NOTE_KINDS = {"rule", "decision", "reference", "runbook", "glossary"}
+NOTE_STATUSES = {"active", "superseded", "deprecated", "pending"}
+
+REQUIRED_SECTIONS = {
+    "rule": {
+        "use_this_when": "Use this when",
+        "rule": "Rule",
+        "do": "Do",
+        "do_not": "Do not",
+        "evidence": "Evidence",
+        "retrieval_hints": "Retrieval hints",
+    },
+    "decision": {
+        "use_this_when": "Use this when",
+        "decision": "Decision",
+        "rationale": "Rationale",
+        "consequences": "Consequences",
+        "evidence": "Evidence",
+        "retrieval_hints": "Retrieval hints",
+    },
+    "reference": {
+        "use_this_when": "Use this when",
+        "summary": "Summary",
+        "key_facts": "Key facts",
+        "evidence": "Evidence",
+        "retrieval_hints": "Retrieval hints",
+    },
+    "runbook": {
+        "use_this_when": "Use this when",
+        "steps": "Steps",
+        "do_not": "Do not",
+        "evidence": "Evidence",
+        "retrieval_hints": "Retrieval hints",
+    },
+    "glossary": {
+        "terms": "Terms",
+        "aliases": "Aliases",
+        "retrieval_hints": "Retrieval hints",
+    },
+}
+
+INDEX_SCHEMA_VERSION = 4
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 PATH_RE = re.compile(r"(?P<path>(?:[A-Za-z]:[\\/])?[\w .@()+={}\[\],'-]+[\\/][\w .@()+={}\[\],'-]+)")
 
@@ -50,6 +99,7 @@ class SearchResult:
 
 @dataclass
 class ContextPacket:
+    kind: str
     rule: str
     confidence: str
     source: str
@@ -98,6 +148,23 @@ def _parse_last_verified(value: str | None) -> date | None:
         return None
 
 
+def _normalise_kind(value: Any, sections: dict[str, str]) -> tuple[str, bool]:
+    raw = str(value or "").strip().lower()
+    if raw in NOTE_KINDS:
+        return raw, True
+    if "decision" in sections:
+        return "decision", False
+    if "rule" in sections or "do" in sections or "do_not" in sections:
+        return "rule", False
+    if "steps" in sections:
+        return "runbook", False
+    if "summary" in sections or "key_facts" in sections:
+        return "reference", False
+    if "terms" in sections or "aliases" in sections:
+        return "glossary", False
+    return "reference", False
+
+
 def _clean_heading(heading: str) -> str:
     return heading.strip().strip("#").strip().rstrip(":").lower()
 
@@ -136,10 +203,36 @@ def _first_sentence(text: str) -> str:
     return match.group(1).strip() if match else compact
 
 
+def _first_content(*values: str, items: list[str] | None = None) -> str:
+    for value in values:
+        sentence = _first_sentence(value)
+        if sentence:
+            return sentence
+    if items:
+        return items[0]
+    return ""
+
+
 def _as_metadata_value(value: Any) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, default=KnowledgeIndex._json_default)
+
+
+def _missing_wiki_links(links: list[str], indexed_paths: set[str]) -> list[str]:
+    indexed_stems = {str(Path(path).with_suffix("")).replace("\\", "/") for path in indexed_paths}
+    missing: list[str] = []
+    for link in links:
+        normalized = link.strip().replace("\\", "/").strip("/")
+        if not normalized:
+            continue
+        candidates = {normalized}
+        if not normalized.endswith(".md"):
+            candidates.add(f"{normalized}.md")
+        candidates.add(str(Path(normalized).with_suffix("")).replace("\\", "/"))
+        if not any(candidate in indexed_paths or candidate in indexed_stems for candidate in candidates):
+            missing.append(link)
+    return missing
 
 
 class KnowledgeIndex:
@@ -193,14 +286,23 @@ class KnowledgeIndex:
 
     def compile_context_packet(self, rel: str, metadata: dict[str, Any], body: str) -> ContextPacket | None:
         sections = parse_semantic_sections(body)
+        kind, explicit_kind = _normalise_kind(metadata.get("kind"), sections)
+        note_rule = sections.get("rule", "").strip()
         decision = sections.get("decision", "").strip()
+        rationale = sections.get("rationale", "").strip()
+        consequences = sections.get("consequences", "").strip()
+        summary = sections.get("summary", "").strip()
         do_items = _list_items(sections.get("do", ""))
         do_not_items = _list_items(sections.get("do_not", ""))
+        key_facts = _list_items(sections.get("key_facts", ""))
+        steps = _list_items(sections.get("steps", ""))
+        terms = _list_items(sections.get("terms", ""))
+        aliases = _list_items(sections.get("aliases", ""))
         evidence_items = _list_items(sections.get("evidence", ""))
         retrieval_hints = _list_items(sections.get("retrieval_hints", ""))
         use_this_when = sections.get("use_this_when", "").strip()
 
-        if not any([decision, do_items, do_not_items, evidence_items]):
+        if not any([note_rule, decision, summary, do_items, do_not_items, key_facts, steps, terms, aliases, evidence_items]):
             return None
 
         last_verified = _normalise_date(metadata.get("last_verified"))
@@ -210,16 +312,11 @@ class KnowledgeIndex:
         needs_verification = stale or evidence_changed
 
         gaps: list[str] = []
-        if "decision" not in sections:
-            gaps.append("missing Decision section")
-        if "do" not in sections:
-            gaps.append("missing Do section")
-        if "do_not" not in sections:
-            gaps.append("missing Do not section")
-        if "evidence" not in sections:
-            gaps.append("missing Evidence section")
-        if "retrieval_hints" not in sections:
-            gaps.append("missing Retrieval hints section")
+        if not explicit_kind:
+            gaps.append("missing or invalid kind frontmatter")
+        for section_key, section_label in REQUIRED_SECTIONS[kind].items():
+            if section_key not in sections:
+                gaps.append(f"missing {section_label} section")
         if not last_verified:
             gaps.append("missing last_verified")
         elif stale:
@@ -227,18 +324,35 @@ class KnowledgeIndex:
         if evidence_changed:
             gaps.append("evidence source changed after verification")
 
-        rule = _first_sentence(decision) or _first_sentence(use_this_when) or (do_items[0] if do_items else "")
+        rule = _first_content(
+            note_rule,
+            decision,
+            summary,
+            use_this_when,
+            rationale,
+            consequences,
+            items=do_items or key_facts or steps or terms,
+        )
         confidence = "medium" if needs_verification or gaps else "high"
         applies_to = _string_list(metadata.get("applies_to"))
 
         semantic_metadata = {
             "note_id": str(metadata.get("id", "") or ""),
+            "kind": kind,
             "scope": str(metadata.get("scope", "") or ""),
             "status": str(metadata.get("status", "") or ""),
             "use_this_when": use_this_when,
+            "rule": note_rule,
             "decision": decision,
+            "rationale": rationale,
+            "consequences": consequences,
+            "summary": summary,
             "constraints": do_items,
             "anti_patterns": do_not_items,
+            "key_facts": key_facts,
+            "steps": steps,
+            "terms": terms,
+            "aliases": aliases,
             "evidence": evidence_items,
             "examples": [],
             "retrieval_hints": retrieval_hints,
@@ -246,7 +360,11 @@ class KnowledgeIndex:
         }
 
         packet = {
+            "kind": kind,
             "rule": rule,
+            "decision": decision,
+            "rationale": rationale,
+            "consequences": consequences,
             "confidence": confidence,
             "source": rel,
             "last_verified": last_verified,
@@ -254,21 +372,36 @@ class KnowledgeIndex:
             "applies_to": applies_to,
             "do": do_items,
             "do_not": do_not_items,
+            "summary": summary,
+            "key_facts": key_facts,
+            "steps": steps,
+            "terms": terms,
+            "aliases": aliases,
             "evidence": evidence_items,
             "gaps": gaps,
         }
 
         index_parts = [
+            f"Kind: {kind}",
             f"Use this when: {use_this_when}",
+            f"Rule: {note_rule}",
             f"Decision: {decision}",
+            f"Rationale: {rationale}",
+            f"Consequences: {consequences}",
+            f"Summary: {summary}",
             "Do: " + "; ".join(do_items),
             "Do not: " + "; ".join(do_not_items),
+            "Key facts: " + "; ".join(key_facts),
+            "Steps: " + "; ".join(steps),
+            "Terms: " + "; ".join(terms),
+            "Aliases: " + "; ".join(aliases),
             "Evidence: " + "; ".join(evidence_items),
             "Retrieval hints: " + "; ".join(retrieval_hints),
             "Applies to: " + "; ".join(applies_to),
         ]
 
         return ContextPacket(
+            kind=kind,
             rule=rule,
             confidence=confidence,
             source=rel,
@@ -282,6 +415,127 @@ class KnowledgeIndex:
             metadata={**semantic_metadata, "context_packet": packet},
             index_text="\n".join(part for part in index_parts if part.strip()),
         )
+
+    def schema_report(self) -> dict[str, Any]:
+        indexed_paths = {str(p).replace("\\", "/") for p in relative_md_paths(self.settings.wiki_root)}
+        records: list[dict[str, Any]] = []
+        id_counts: dict[str, int] = {}
+
+        for rel_path in relative_md_paths(self.settings.wiki_root):
+            rel = str(rel_path).replace("\\", "/")
+            raw = (self.settings.wiki_root / rel_path).read_text(encoding="utf-8")
+            parsed = frontmatter.loads(raw)
+            body = parsed.content
+            sections = parse_semantic_sections(body)
+            kind, explicit_kind = _normalise_kind(parsed.metadata.get("kind"), sections)
+            links = extract_links(body)
+            note_id = str(parsed.metadata.get("id", "") or "").strip()
+            if note_id:
+                id_counts[note_id] = id_counts.get(note_id, 0) + 1
+            records.append(
+                {
+                    "source_file": rel,
+                    "metadata": parsed.metadata,
+                    "body": body,
+                    "sections": sections,
+                    "kind": kind,
+                    "explicit_kind": explicit_kind,
+                    "note_id": note_id,
+                    "links": links,
+                    "broken_links": _missing_wiki_links(links, indexed_paths),
+                }
+            )
+
+        files: list[dict[str, Any]] = []
+        by_kind: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+        packet_files = 0
+        files_with_issues = 0
+        issue_count = 0
+
+        for record in records:
+            metadata = record["metadata"]
+            sections = record["sections"]
+            kind = str(record["kind"])
+            packet = self.compile_context_packet(record["source_file"], metadata, record["body"])
+            missing_sections = [
+                section_label
+                for section_key, section_label in REQUIRED_SECTIONS[kind].items()
+                if section_key not in sections
+            ]
+            last_verified = _normalise_date(metadata.get("last_verified"))
+            verified_date = _parse_last_verified(last_verified)
+            status = str(metadata.get("status", "") or "").strip()
+            issues: list[dict[str, str]] = []
+
+            def add_issue(severity: str, code: str, message: str) -> None:
+                issues.append({"severity": severity, "code": code, "message": message})
+
+            if not record["note_id"]:
+                add_issue("warning", "missing_id", "missing id frontmatter")
+            elif id_counts.get(record["note_id"], 0) > 1:
+                add_issue("warning", "duplicate_id", f"duplicate id frontmatter: {record['note_id']}")
+            if not record["explicit_kind"]:
+                add_issue("error", "missing_or_invalid_kind", "missing or invalid kind frontmatter")
+            if not status:
+                add_issue("warning", "missing_status", "missing status frontmatter")
+            elif status not in NOTE_STATUSES:
+                add_issue("warning", "invalid_status", f"status should be one of {sorted(NOTE_STATUSES)}")
+            if not last_verified:
+                add_issue("error", "missing_last_verified", "missing last_verified frontmatter")
+            elif verified_date is None:
+                add_issue("error", "invalid_last_verified", "last_verified is not an ISO date")
+            for section in missing_sections:
+                add_issue("error", "missing_required_section", f"missing {section} section")
+            if packet is None:
+                add_issue("error", "packet_not_compiled", "note does not compile into a context packet")
+            elif packet.needs_verification:
+                add_issue("warning", "needs_verification", "packet needs verification")
+            for link in record["broken_links"]:
+                add_issue("warning", "broken_wiki_link", f"wiki link target not found: {link}")
+
+            if packet:
+                packet_files += 1
+            if issues:
+                files_with_issues += 1
+                issue_count += len(issues)
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if status:
+                by_status[status] = by_status.get(status, 0) + 1
+
+            files.append(
+                {
+                    "source_file": record["source_file"],
+                    "note_id": record["note_id"],
+                    "kind": kind,
+                    "explicit_kind": record["explicit_kind"],
+                    "status": status,
+                    "last_verified": last_verified,
+                    "packet_compiled": packet is not None,
+                    "confidence": packet.confidence if packet else "none",
+                    "needs_verification": packet.needs_verification if packet else True,
+                    "gaps": packet.gaps if packet else ["packet not compiled"],
+                    "missing_sections": missing_sections,
+                    "links": record["links"],
+                    "broken_links": record["broken_links"],
+                    "issues": issues,
+                }
+            )
+
+        return {
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "generated_utc": datetime.now(timezone.utc).isoformat(),
+            "wiki_root": str(self.settings.wiki_root),
+            "total_files": len(files),
+            "summary": {
+                "packet_files": packet_files,
+                "files_with_issues": files_with_issues,
+                "issue_count": issue_count,
+                "by_kind": dict(sorted(by_kind.items())),
+                "by_status": dict(sorted(by_status.items())),
+            },
+            "files": files,
+        }
 
     def reindex(self) -> dict[str, int]:
         manifest = self._read_manifest()
@@ -336,7 +590,11 @@ class KnowledgeIndex:
                         "section_rank": SECTION_PRIORITY["packet"],
                         "context_packet": json.dumps(
                             {
+                                "kind": packet.kind,
                                 "rule": packet.rule,
+                                "decision": packet.metadata.get("decision", ""),
+                                "rationale": packet.metadata.get("rationale", ""),
+                                "consequences": packet.metadata.get("consequences", ""),
                                 "confidence": packet.confidence,
                                 "source": packet.source,
                                 "last_verified": packet.last_verified,
@@ -344,6 +602,11 @@ class KnowledgeIndex:
                                 "applies_to": packet.applies_to,
                                 "do": packet.do,
                                 "do_not": packet.do_not,
+                                "summary": packet.metadata.get("summary", ""),
+                                "key_facts": packet.metadata.get("key_facts", []),
+                                "steps": packet.metadata.get("steps", []),
+                                "terms": packet.metadata.get("terms", []),
+                                "aliases": packet.metadata.get("aliases", []),
                                 "evidence": packet.evidence,
                                 "gaps": packet.gaps,
                             },

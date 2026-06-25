@@ -82,6 +82,12 @@ Image retrieval needs implementation rules.
 ## Decision
 Return compiled context packets before raw chunks.
 
+## Rationale
+Packet results give agents decision-ready context without loading full notes.
+
+## Consequences
+Raw chunks remain available as fallback when no packet matches.
+
 ## Do
 - Parse semantic sections.
 - Preserve Markdown as the editable format.
@@ -99,6 +105,7 @@ Return compiled context packets before raw chunks.
                 "Image.md",
                 {
                     "id": "image-guidance",
+                    "kind": "decision",
                     "scope": "project-specific",
                     "last_verified": date.today().isoformat(),
                     "status": "active",
@@ -109,16 +116,67 @@ Return compiled context packets before raw chunks.
 
         self.assertIsNotNone(packet)
         assert packet is not None
+        self.assertEqual(packet.kind, "decision")
         self.assertEqual(packet.rule, "Return compiled context packets before raw chunks.")
         self.assertEqual(packet.confidence, "high")
         self.assertFalse(packet.needs_verification)
         self.assertEqual(packet.applies_to, ["wiki_search", "indexer"])
+        self.assertEqual(packet.metadata["context_packet"]["decision"], "Return compiled context packets before raw chunks.")
+        self.assertEqual(packet.metadata["context_packet"]["rationale"], "Packet results give agents decision-ready context without loading full notes.")
         self.assertIn("Parse semantic sections.", packet.do)
         self.assertIn("Require agents to maintain generated packet files.", packet.do_not)
         self.assertEqual(packet.metadata["decision"], "Return compiled context packets before raw chunks.")
         self.assertIn("MCP image support contract", packet.metadata["retrieval_hints"])
         self.assertIn("raw_prose", packet.metadata)
         self.assertNotIn("Raw prose:", packet.index_text)
+
+    def test_compile_context_packet_supports_reference_notes(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            settings = types.SimpleNamespace(
+                wiki_root=Path(tmpdir) / "wiki",
+                kb_root=Path(tmpdir) / "kb",
+                embedding_model="dummy",
+                staleness_days=90,
+            )
+            index = self.indexer_module.KnowledgeIndex(settings)
+            body = """# Wiki Vocabulary
+
+## Use this when
+Agents need to understand wiki note taxonomy.
+
+## Summary
+Reference notes store durable facts that are useful for retrieval but are not rules.
+
+## Key facts
+- A reference note can describe concepts, fields, or API shapes.
+- It should not force Do or Do not sections.
+
+## Evidence
+- README.md
+
+## Retrieval hints
+- wiki note kind reference packet
+"""
+            packet = index.compile_context_packet(
+                "Vocabulary.md",
+                {
+                    "id": "wiki-vocabulary",
+                    "kind": "reference",
+                    "scope": "general",
+                    "last_verified": date.today().isoformat(),
+                    "status": "active",
+                    "applies_to": ["wiki"],
+                },
+                body,
+            )
+
+        self.assertIsNotNone(packet)
+        assert packet is not None
+        self.assertEqual(packet.kind, "reference")
+        self.assertEqual(packet.confidence, "high")
+        self.assertEqual(packet.rule, "Reference notes store durable facts that are useful for retrieval but are not rules.")
+        self.assertIn("A reference note can describe concepts, fields, or API shapes.", packet.metadata["key_facts"])
+        self.assertEqual(packet.gaps, [])
 
     def test_compile_context_packet_flags_missing_or_stale_verification(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -149,6 +207,45 @@ Verify stale notes before applying them.
         self.assertEqual(packet.confidence, "medium")
         self.assertTrue(packet.needs_verification)
         self.assertIn("last_verified exceeds staleness threshold", packet.gaps)
+
+    def test_schema_report_flags_legacy_schema_and_link_gaps(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            wiki_root = Path(tmpdir) / "wiki"
+            wiki_root.mkdir()
+            (wiki_root / "Legacy.md").write_text(
+                """# Legacy
+
+## Decision
+Use typed packets.
+
+## Evidence
+- [[Missing]]
+""",
+                encoding="utf-8",
+            )
+            settings = types.SimpleNamespace(
+                wiki_root=wiki_root,
+                kb_root=Path(tmpdir) / "kb",
+                embedding_model="dummy",
+                staleness_days=90,
+            )
+            index = self.indexer_module.KnowledgeIndex(settings)
+            report = index.schema_report()
+
+        self.assertEqual(report["schema_version"], self.indexer_module.INDEX_SCHEMA_VERSION)
+        self.assertEqual(report["total_files"], 1)
+        self.assertEqual(report["summary"]["packet_files"], 1)
+        self.assertEqual(report["summary"]["files_with_issues"], 1)
+        entry = report["files"][0]
+        self.assertEqual(entry["source_file"], "Legacy.md")
+        self.assertEqual(entry["kind"], "decision")
+        self.assertFalse(entry["explicit_kind"])
+        self.assertTrue(entry["packet_compiled"])
+        self.assertIn("Missing", entry["broken_links"])
+        issue_codes = {issue["code"] for issue in entry["issues"]}
+        self.assertIn("missing_or_invalid_kind", issue_codes)
+        self.assertIn("missing_last_verified", issue_codes)
+        self.assertIn("broken_wiki_link", issue_codes)
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ def create_app():
 
     @mcp.tool()
     def wiki_search(query: str, top_k: int | None = None):
-        """Search the repository wiki for decision packets and relevant chunks matching a query."""
+        """Search the repository wiki for typed context packets and relevant chunks matching a query."""
         results = []
         for r in index.search(query, top_k):
             item = {
@@ -108,11 +108,21 @@ def create_app():
                     if key
                     in {
                         "note_id",
+                        "kind",
                         "scope",
                         "status",
+                        "use_this_when",
+                        "rule",
                         "decision",
+                        "rationale",
+                        "consequences",
+                        "summary",
                         "constraints",
                         "anti_patterns",
+                        "key_facts",
+                        "steps",
+                        "terms",
+                        "aliases",
                         "evidence",
                         "examples",
                         "retrieval_hints",
@@ -131,6 +141,11 @@ def create_app():
     def wiki_list():
         """List all wiki documents currently available in the knowledge base."""
         return index.list_docs()
+
+    @mcp.tool()
+    def wiki_schema_report():
+        """Report typed note schema health, packet gaps, stale verification, duplicate ids, and broken wiki links."""
+        return index.schema_report()
 
     @mcp.tool()
     def wiki_write(path: str, content: str):
