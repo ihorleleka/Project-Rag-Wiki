@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -389,7 +389,11 @@ class KnowledgeIndex:
         self.client = chromadb.PersistentClient(path=str(self.settings.kb_root / "chroma"))
         self.collection = self.client.get_or_create_collection("wiki_chunks", metadata={"hnsw:space": "cosine"})
         self.provider = OnnxMiniLmProvider(settings.embedding_model)
+        # Index mutations are serialized independently from document writes.
+        # Embedding a reindex can take seconds; holding this lock while doing so
+        # used to make wiki_write/delete/rename wait behind the whole reindex.
         self._write_lock = threading.RLock()
+        self._document_lock = threading.RLock()
         self._lexical_lock = threading.RLock()
         self._lexical_cache: dict[str, Any] | None = None
         self.reranker = load_reranker(settings)
@@ -953,10 +957,10 @@ class KnowledgeIndex:
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, int]:
-        # Serialize filesystem snapshots, Chroma mutations, and manifest writes
-        # with hash-protected note mutations. The async coordinator serializes
-        # reindex requests; this lock also closes the race between a watcher
-        # pass and a concurrent MCP write/delete/rename.
+        # Serialize Chroma mutations and manifest writes. Document mutations use
+        # a separate lock so an embedding pass cannot make MCP writes wait; the
+        # atomic document operations let a concurrent reindex observe either the
+        # old or new complete file and a queued targeted pass catches it up.
         with self._write_lock:
             return self._reindex_unlocked(
                 cancel_event=cancel_event,
@@ -1071,7 +1075,22 @@ class KnowledgeIndex:
             if cancel_event and cancel_event.is_set():
                 raise RuntimeError("indexing cancelled")
             full = self.settings.wiki_root / PurePosixPath(rel)
-            raw = full.read_text(encoding="utf-8")
+            try:
+                raw = full.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                # A concurrent delete/rename may remove a path after the scan.
+                # Treat it as removed; the queued targeted request will reconcile
+                # any other dependency changes.
+                old = prev.get(rel)
+                ids = old.get("chunk_ids", []) if old else []
+                if ids:
+                    self.collection.delete(ids=ids)
+                current.pop(rel, None)
+                removed += 1
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total_work)
+                continue
             digest = sha256_text(raw)
             old = prev.get(rel)
             if old and old.get("hash") == digest and old.get("schema_version") == INDEX_SCHEMA_VERSION:
@@ -1903,7 +1922,7 @@ class KnowledgeIndex:
         expected_hash: str | None = None,
     ) -> dict[str, Any]:
         target = self._resolve_wiki_markdown_path(rel_path)
-        with self._write_lock:
+        with self._document_lock:
             current_content = target.read_text(encoding="utf-8") if target.exists() else None
             current_hash = sha256_text(current_content) if current_content is not None else None
             if current_content is not None and expected_hash is None:
@@ -1953,7 +1972,7 @@ class KnowledgeIndex:
 
     def delete_doc(self, rel_path: str, expected_hash: str) -> dict[str, Any]:
         target = self._resolve_wiki_markdown_path(rel_path)
-        with self._write_lock:
+        with self._document_lock:
             if not target.exists():
                 return {
                     "status": "conflict",
@@ -1995,7 +2014,7 @@ class KnowledgeIndex:
     ) -> dict[str, Any]:
         source = self._resolve_wiki_markdown_path(source_path)
         destination = self._resolve_wiki_markdown_path(destination_path)
-        with self._write_lock:
+        with self._document_lock:
             if not source.exists():
                 return {
                     "status": "conflict",

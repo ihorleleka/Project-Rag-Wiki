@@ -8,7 +8,7 @@ const path = require("path");
 // derive from this constant. Schema 7 / tool contract 5 was a hard break from
 // the schema 6 / contract 4 line, so only the current release is supported;
 // older images classify as incompatible rather than merely outdated.
-const CURRENT_SERVICE_VERSION = "0.1.11";
+const CURRENT_SERVICE_VERSION = "0.1.12";
 const IMAGE_REPOSITORY = "ihorleleka/project-rag-wiki";
 const DEFAULT_IMAGE = `${IMAGE_REPOSITORY}:${CURRENT_SERVICE_VERSION}`;
 
